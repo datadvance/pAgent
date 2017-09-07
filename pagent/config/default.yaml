@@ -1,0 +1,25 @@
+# Agent identity.
+identity:
+  name: "agent"
+  uid: null
+# Server mode: listen for connections.
+server:
+  enabled: True
+  port: 0
+  interface: "127.0.0.1"
+  accept_tokens: []
+# Client mode: automatically connect to remote job router.
+client:
+  enabled: False
+  address: ""
+  token: "default"
+  exit_on_fail: False
+  reconnect_delay: 10.
+control:
+  enabled: True
+  interface: "127.0.0.1"
+  port: 0
+jobs:
+  background_threads: 1
+  root: null
+properties: {}
