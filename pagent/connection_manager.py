@@ -48,8 +48,7 @@ class ConnectionManager(object):
 
     @property
     def debug(self):
-        """Config parameter enabling debug mode for all connections.
-        """
+        """Config parameter enabling debug mode for all connections."""
         return self._debug
 
     @property
@@ -57,13 +56,11 @@ class ConnectionManager(object):
         return self._on_connection_lost
 
     def get_connections(self):
-        """Get all active connections.
-        """
+        """Get all active connections."""
         return list(self._connections.values())
 
     def register(self, connection, handshake):
-        """Try to register new connection with given handshake.
-        """
+        """Try to register new connection with given handshake."""
         assert connection.mode in prpc.ConnectionMode
         assert connection.mode != prpc.ConnectionMode.NEW
         # In fact, we should wait for key for some time
@@ -74,7 +71,7 @@ class ConnectionManager(object):
         # is too ugly.
         if connection.id in self._connections:
             raise ValueError(
-                'connection "%s" (mode: %s) is already registered' %
+                'connection \'%s\' (mode: %s) is already registered' %
                 (connection.id, connection.mode)
             )
         connection.on_close.append(self._unregister)
@@ -88,8 +85,7 @@ class ConnectionManager(object):
         )
 
     async def _unregister(self, connection):
-        """Unregisters connection when it is closed.
-        """
+        """Unregisters connection when it is closed."""
         del self._connections[connection.id]
         self._log.info(
             'Dropped connection: id %s, mode: %s, peer: %s, token: %s',

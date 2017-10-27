@@ -43,7 +43,7 @@ async def jobs(request):
         job_desc = {
             'uid': job.uid,
             'name': job.name,
-            'workdir': str(job.workdir),
+            'sandbox': str(job.sandbox),
             'sender': job.sender._asdict(),
             'port': job.port,
             'state': job.state.name

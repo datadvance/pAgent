@@ -27,21 +27,16 @@ import yaml
 
 
 def load_default():
-    """Load default config.
-    """
-    return load(
-        pathlib.Path(__file__)
-            .absolute()
-            .parent
-            .joinpath('default.yaml')
-    )
+    """Load default config."""
+    path = pathlib.Path(__file__).absolute().parent.joinpath('default.yaml')
+    return load(path)
 
 
 def load(config_path):
     """Load config from file.
 
     Args:
-        config_path
+        config_path: path to config file
     """
     with open(config_path) as f:
         loaded = yaml.safe_load(f)

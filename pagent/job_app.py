@@ -21,8 +21,6 @@
 # SOFTWARE.
 #
 
-import http
-
 import aiohttp.web
 
 from . import handlers

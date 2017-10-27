@@ -81,23 +81,22 @@ class JobManager(object):
     DEFAULT_JOB_NAME = '<unnamed job>'
 
     PREFIX_PROPERTIES = 'DA_PAGENT_'
-    PREFIX_COMMAND = 'DA_P7_'
 
     PROPERTY_JOB_ENDPOINT = 'JOB_ENDPOINT'
     PROPERTY_JOB_ID = 'JOB_ID'
 
-    def __init__(self, workdir_root=None, properties=None,
+    def __init__(self, temp_root=None, properties=None,
                  logger=None, loop=None):
         self._loop = loop or asyncio.get_event_loop()
         self._log = logger or logging.getLogger(self.DEFAULT_LOG_NAME)
         self._properties = properties or {}
         self._job_start_endpoint = None
-        if workdir_root is not None:
-            workdir_root = os.fspath(workdir_root)
+        if temp_root is not None:
+            temp_root = os.fspath(temp_root)
         self._session_root = pathlib.Path(
             tempfile.mkdtemp(
                 prefix=self.DEFAULT_WORKDIR_PREFIX,
-                dir=workdir_root
+                dir=temp_root
             )
         )
 
@@ -106,16 +105,16 @@ class JobManager(object):
         self._state = JobManagerState.RUNNING
         # TODO: Jobs priority queue for cleanup?
         # TODO: As an idea, cleanup old session roots?
-        self._log.debug(
-          'Initialized, workdir root: %s' % (self._session_root,)
-        )
+        self._log.debug('Initialized, session sandbox: %s' % (self._session_root,))
 
     async def close(self):
+        """Stop job manager disposing of all jobs.
+        """
         if self._state == JobManagerState.CLOSED:
             return
         self._state = JobManagerState.CLOSED
         # File operations may take a while, so issue double log message.
-        self._log.debug("Shutting down")
+        self._log.debug('Shutting down')
         for job in self._jobs.values():
             # TODO: Kill jobs recursively?
             await job.close()
@@ -124,15 +123,33 @@ class JobManager(object):
         # Can be done synchronously,
         # we are not accepting any new requests by now.
         shutil.rmtree(str(self._session_root), ignore_errors=True)
-        self._log.debug("Shutdown complete")
+        self._log.debug('Shutdown complete')
+
+    @property
+    def session_root(self):
+        """Job manager session root dir containing all job sandboxes."""
+        return self._session_root
 
     def set_job_start_endpoint(self, job_endpoint):
+        """Register an HTTP endpoint to use with EXTERNAL port discovery.
+
+        Will be advertised to all jobs through environment variable.
+
+        Args:
+            job_endpoint: Complete url accepting 'job start' messages.
+        """
         self._job_start_endpoint = job_endpoint
 
     def get_jobs(self):
+        """Get list of all jobs. Allows direct access to Job's API."""
         return list(self._jobs.values())
 
     async def job_remove_all_by_connection(self, connection_id):
+        """Remove all jobs spawned from the given connection.
+
+        Args:
+            connection_id: Connection id.
+        """
         if connection_id not in self._jobs_by_connection:
             return
         to_remove = list(self._jobs_by_connection[connection_id].values())
@@ -140,14 +157,20 @@ class JobManager(object):
             await self.job_remove(job.uid)
 
     def job_count_by_connection(self, connection_id):
-        # Just len(self._jobs_by_connection[connection_id]) would
-        # work too, but it can insert unwanted values. So let's check
-        # connection id separately.
-        if connection_id not in self._jobs_by_connection:
-            return 0
-        return len(self._jobs_by_connection[connection_id])
+        """Get number of active jobs related to particular connection.
+
+        Args:
+            connection_id: Connection id.
+        """
+        return len(self._jobs_by_connection.get(connection_id, []))
 
     def job_create(self, sender, name=None):
+        """Create a new job.
+
+        Args:
+            uid: Job id.
+            name: Job name (optional, can be used by API's for better UX).
+        """
         self._require_running()
         name = name or self.DEFAULT_JOB_NAME
         job_id = uuid.uuid4().hex
@@ -157,7 +180,7 @@ class JobManager(object):
         job = Job(
             job_id,
             name,
-            str(self._session_root.joinpath(job_id)),
+            self._session_root.joinpath(job_id),
             sender,
             self._loop
         )
@@ -167,6 +190,11 @@ class JobManager(object):
         return job_id
 
     async def job_remove(self, uid):
+        """Remove (terminating it if needed) the job.
+
+        Args:
+            uid: Job id.
+        """
         self._require_running()
         job = self._get_job(uid)
         await job.close()
@@ -176,12 +204,22 @@ class JobManager(object):
             del self._jobs_by_connection[job.sender.connection]
         self._log.debug('Removed job %s', job)
 
-    async def job_start(self, uid, args, env, port_expected_count):
+    async def job_start(self, uid, args, env, cwd, port_expected_count,
+                        forward_stdout=False):
+        """Start process inside a job.
+
+        Args:
+            uid: Job id.
+            args: Process command line as a list of strings.
+            env: Environment variables dictionary.
+            cwd: Relative path to the cwd inside job sandbox (can be None).
+            port_expected_count: Number of ports that job should bind.
+            forward_stdout: Send job output directly to the agent's output.
+        """
         self._require_running()
         if port_expected_count and self._job_start_endpoint is None:
             raise RuntimeError(
-                'cannot run server job: '
-                'job start endpoint is not set'
+                'cannot run server job: job start endpoint is not set'
             )
         process_env = dict(os.environ)
         # TODO: Make properties case-insensitve, forced uppercase?
@@ -199,59 +237,105 @@ class JobManager(object):
                 },
                 self.PREFIX_PROPERTIES
             )
-        if env is not None:
-            self._extend_with_prefix(process_env, env, self.PREFIX_COMMAND)
+        process_env.update(env or {})
 
-        await self._get_job(uid).start(args, process_env, port_expected_count)
+        await self._get_job(uid).start(
+            args, process_env, cwd, port_expected_count, forward_stdout
+        )
         # TODO: Support job queueing?
         # (and finite amount of job slots on an agent instance)
 
     async def job_kill(self, uid):
+        """Forcefully terminate a job.
+
+        Args:
+            uid: Job id.
+        """
         self._require_running()
         await self._get_job(uid).kill()
 
     async def job_wait(self, uid):
+        """Wait until job completes.
+
+        Note:
+            Mostly for tests. Wait is currently indefinite.
+
+        Args:
+            uid: Job id.
+        """
         self._require_running()
         await self._get_job(uid).wait()
 
-    def job_workdir(self, uid):
+    def job_sandbox(self, uid):
+        """Get path to the job sandbox.
+
+        Args:
+            uid: Job id.
+        """
         self._require_running()
         # TODO: job lock?
-        return self._get_job(uid).workdir
+        return self._get_job(uid).sandbox
 
     def job_port(self, uid):
+        """Get job listen port (if discovered at the start).
+
+        Args:
+            uid: Job id.
+        """
         self._require_running()
         return self._get_job(uid).port
 
     def job_info(self, uid):
+        """Get job info - name, state, sender etc.
+
+        Args:
+            uid: Job id.
+        """
         self._require_running()
         job = self._get_job(uid)
         return JobInfo(job.uid, job.name, job.state, job.sender)
 
     def job_notify(self, uid, port):
+        """Notify job manager that job is up and running.
+        Used as a part of EXTERNAL port discovery mechanism.
+
+        Args:
+            uid: Job id.
+            port: Port reported by a job.
+        """
         self._require_running()
         self._get_job(uid).notify([port])
 
     def _require_running(self):
+        """Aux - assert that job manager is currently operational."""
         if self._state != JobManagerState.RUNNING:
-            raise JobManagerInvalidStateError("job manager is not running")
+            raise JobManagerInvalidStateError('job manager is not running')
 
     def _get_job(self, uid):
         """Aux - get job instance by id."""
         try:
             return self._jobs[uid]
         except KeyError:
-            raise JobNotFoundError('job "%s" is not found' % (uid,))
+            raise JobNotFoundError('job \'%s\' is not found' % (uid,))
 
     @staticmethod
     def _extend_with_prefix(base, extensions, prefix):
+        """Aux - extend a dict 'base' by keys from 'extensions' with a prefix.
+
+        Args:
+            base: Base dictionary.
+            extensions: Ext dictionary - keys to insert into the base one.
+            prefix: Prefix to add to each ext key.
+        """
         for key, value in extensions.items():
             base[prefix + key] = value
 
     async def __aenter__(self):
+        """Async context manager interface."""
         return self
 
     async def __aexit__(self, *exc_info):
+        """Async context manager interface."""
         await self.close()
         return False
 
@@ -260,12 +344,12 @@ class Job(object):
     FILENAME_STDOUT = '.pagent.stdout'
     FILENAME_STDERR = '.pagent.stderr'
 
-    def __init__(self, uid, name, workdir, sender, loop):
+    def __init__(self, uid, name, sandbox, sender, loop):
         # TODO: Add some timestamps (at least 'created').
         # May be done later, when we'll add UI.
         self._uid = uid
         self._name = name
-        self._workdir = pathlib.Path(workdir)
+        self._sandbox = pathlib.Path(sandbox)
         self._sender = sender
         self._loop = loop
 
@@ -273,95 +357,133 @@ class Job(object):
         self._state = JobState.NEW
         self._process = None
 
-        if self._workdir.exists():
-            # For now, we demand a new workdir for each job.
+        if self._sandbox.exists():
+            # For now, we demand a new sandbox for each job.
             # This nice class runs 'rm -rf' sometimes, so
             # it better be on a temp directory.
             raise ValueError('working directory already exists')
         else:
-            pathlib.Path(self._workdir).mkdir(parents=True)
+            pathlib.Path(self._sandbox).mkdir(parents=True)
 
     @property
     def uid(self):
+        """Job unique id."""
         return self._uid
 
     @property
     def name(self):
+        """Job human-readable name."""
         return self._name
 
     @property
-    def workdir(self):
-        return self._workdir
+    def sandbox(self):
+        """Job sandbox path."""
+        return self._sandbox
 
     @property
     def sender(self):
+        """Job sender description (connection, token, etc)."""
         return self._sender
 
     @property
     def port(self):
+        """Listen port number used by job."""
         if self._state == JobState.RUNNING:
             return self._process.port
         return None
 
     @property
     def state(self):
+        """Current job state."""
         return self._state
 
-    async def start(self, args, env, port_expected_count):
+    async def start(self, args, env, cwd, port_expected_count,
+                    forward_stdout):
+        """Start process inside a job.
+
+        Args:
+            args: Process command line as a list of strings.
+            env: Environment variables dictionary.
+            cwd: Relative path to the cwd inside job sandbox (can be None).
+            port_expected_count: Number of ports that job should bind.
+            forward_stdout: Send job output directly to the agent's output.
+        """
         if self._state != JobState.NEW:
             raise JobInvalidStateError('job cannot be restarted')
-        self._process = polled_process.PolledProcess(
-            args, env
-        )
+        self._process = polled_process.PolledProcess(args, env)
         self._process.on_finished.append(self._process_finished)
         self._state = JobState.PENDING
-        stdout_path = self.workdir.joinpath(self.FILENAME_STDOUT)
-        stderr_path = self.workdir.joinpath(self.FILENAME_STDERR)
+        cwd = pathlib.PurePath(cwd or '')
+        if cwd.is_absolute():
+            raise ValueError('job working directory path must be relative')
         if port_expected_count:
             port_discovery = polled_process.ProcessPortDiscovery.EXTERNAL
         else:
             port_discovery = polled_process.ProcessPortDiscovery.NONE
+        process_kwargs = dict(
+            port_discovery=port_discovery,
+            workdir=str(self.sandbox.joinpath(cwd)),
+            port_expected_count=port_expected_count
+        )
         try:
-            with open(stdout_path, 'wb') as stdout:
-                with open(stderr_path, 'wb') as stderr:
-                    await self._process.start(
-                        stdout=stdout, stderr=stderr,
-                        port_discovery=port_discovery,
-                        workdir=str(self.workdir),
-                        port_expected_count=port_expected_count
-                    )
-                    self._state = JobState.RUNNING
+            if forward_stdout:
+                await self._process.start(
+                    stdout=None, stderr=None,
+                    **process_kwargs
+                )
+            else:
+                stdout_path = self.sandbox.joinpath(self.FILENAME_STDOUT)
+                stderr_path = self.sandbox.joinpath(self.FILENAME_STDERR)
+                with open(stdout_path, 'wb') as stdout:
+                    with open(stderr_path, 'wb') as stderr:
+                        await self._process.start(
+                            stdout=stdout, stderr=stderr,
+                            **process_kwargs
+                        )
+            self._state = JobState.RUNNING
         except Exception:
             self._state = JobState.FINISHED
             raise
 
     async def kill(self):
+        """Kill a process running inside this job."""
         if self._state in (JobState.PENDING, JobState.RUNNING):
             await self._process.kill()
         else:
             raise JobInvalidStateError('job is not running')
 
     async def wait(self):
+        """Wait until the job completes."""
         if self._state in (JobState.PENDING, JobState.RUNNING):
             await self._process.wait()
 
     def notify(self, ports):
+        """Notify job about process' listen ports.
+
+        Used for EXTERNAL port discovery.
+
+        Args:
+            ports: List of listen ports.
+        """
         if self._state == JobState.PENDING:
             self._process.notify(ports)
 
     async def close(self):
+        """Finalize the job.
+        """
         if self._state == JobState.CLOSED:
             return
         if self._state in (JobState.PENDING, JobState.RUNNING):
             await self._process.kill()
-        # Important - run remove workdir in executor so we don't block
+        # Important - run remove sandbox in executor so we don't block
         # the event loop with this potentially long process.
-        await self._loop.run_in_executor(None, self._remove_workdir)
+        await self._loop.run_in_executor(None, self._remove_sandbox)
         self._state = JobState.CLOSED
 
-    def _remove_workdir(self):
-        if self._workdir.exists():
-            shutil.rmtree(str(self._workdir), ignore_errors=True)
+    def _remove_sandbox(self):
+        """Aux - remove job sandbox."""
+        if self._sandbox.exists():
+            shutil.rmtree(str(self._sandbox), ignore_errors=True)
 
     def _process_finished(self, process):
         """Process on_finished signal handler."""
@@ -373,7 +495,7 @@ class Job(object):
             repr_builder.ReprBuilder(self)
             .add_value('uid', self._uid)
             .add_value('state', self._state.name)
-            .add_value('workdir', str(self._workdir))
+            .add_value('sandbox', str(self._sandbox))
             .add_value('sender_uid', self._sender.uid)
             .format()
         )

@@ -95,9 +95,7 @@ class PolledProcess(object):
 
     EXPECTED_SOCKET_TYPE = 'tcp'
 
-    def __init__(self, args, env,
-                 poll_interval=0.1,
-                 logger=None, loop=None):
+    def __init__(self, args, env, poll_interval=0.1, logger=None, loop=None):
         # 'Constant' state
         #
         self._loop = loop or asyncio.get_event_loop()
@@ -151,7 +149,7 @@ class PolledProcess(object):
 
         Args:
             stdout: Process stdout destination (see subprocess docs)
-            stderr: Process stdout destination (see subprocess docs).
+            stderr: Process stderr destination (see subprocess docs).
             workdir: Process working directory (see subprocess docs).
             port_discovery: Port discovery mode.
             port_expected_count: Expected number of ports
@@ -223,10 +221,10 @@ class PolledProcess(object):
         if self._state not in (ProcessState.PENDING, ProcessState.RUNNING):
             return
         assert self._process is not None
-        assert self._poll_task is not None
         self._log.debug('Killing the process.')
         self._process.kill()
-        await self._poll_task
+        if self._poll_task is not None:
+            await self._poll_task
 
     async def wait(self):
         """Block until the process has finished."""
@@ -244,8 +242,7 @@ class PolledProcess(object):
             return
         if self._port_notification is None:
             raise ProcessError(
-                'process can be notified '
-                'only in EXTERNAL port discovery mode'
+                'process can be notified only in EXTERNAL port discovery mode'
             )
         for port in ports:
             assert isinstance(port, int)
@@ -257,11 +254,9 @@ class PolledProcess(object):
         """Monitor the process status. Should be run as an async task."""
         assert self._state == ProcessState.RUNNING
         while self._process.poll() is None:
-            # TODO: Make use of memory info.
-            try:
-                memory = self._process_api.memory_info().rss
-            except (psutil.AccessDenied, psutil.NoSuchProcess):
-                memory = 0
+            # TODO: Additional process monitoring goes here, e.g.
+            #   RSS memory: self._process_api.memory_info().rss
+            # (don't forget to wrap each separate psapi call in try/catch)
             await asyncio.sleep(self._poll_interval, loop=self._loop)
         if self._process.returncode:
             self._log.warning(
@@ -274,7 +269,7 @@ class PolledProcess(object):
         self._clear()
         try:
             await self._on_finished.send(self)
-        except Exception as ex:
+        except Exception:
             self._log.exception('on_finished callback failed')
         async with self._state_changed:
             self._state_changed.notify_all()
@@ -337,9 +332,10 @@ class PolledProcess(object):
             except (psutil.AccessDenied, psutil.NoSuchProcess):
                 return False
             if len(listen_sockets) == expected_count:
-                for connection in listen_sockets:
-                    _, port = connection.laddr
-                    self._ports.append(port)
+                self._ports = [
+                    connection.laddr[1]
+                    for connection in listen_sockets
+                ]
                 return True
             elif len(listen_sockets) < expected_count:
                 # Not yet, just wait and retry.
@@ -348,9 +344,7 @@ class PolledProcess(object):
                 # Not really reliable branch, due to uncontrollable
                 # concurrency we can always detect a some bound ports of
                 # many and continue with 'successfull' start.
-                raise ProcessPortCountError(
-                    'too many listen ports are open'
-                )
+                raise ProcessPortCountError('too many listen ports are open')
         elif discovery_type == ProcessPortDiscovery.EXTERNAL:
             assert self._port_notification is not None
             done, _ = await asyncio.wait(
@@ -359,9 +353,7 @@ class PolledProcess(object):
             if done:
                 ports = self._port_notification.result()
                 if len(ports) != expected_count:
-                    raise ProcessPortCountError(
-                        'wrong number of open ports'
-                    )
+                    raise ProcessPortCountError('wrong number of open ports')
                 self._ports = ports
                 return True
             return False

@@ -88,15 +88,26 @@ class Client(object):
             except asyncio.CancelledError:
                 raise
             except Exception as ex:
-                self._log.debug(
-                    'Client connection failed, retrying in %.3f s, '
-                    'reason: %s',
-                    self._reconnect_delay,
-                    ex
-                )
                 if self._exit_on_fail:
-                    self._log.warning('Exit on failure enabled, exiting...')
+                    self._log.warning(
+                        'Client connection failed. '
+                        'Retries are disabled, exiting. '
+                    )
+                    self._log.debug(
+                        'Reason: %s/%s',
+                        type(ex).__name__,
+                        ex
+                    )
                     self._exit_handler(exit_code=1)
+                    return
+                else:
+                    self._log.debug(
+                        'Client connection failed, retrying in %.3f s, '
+                        'reason: %s/%s',
+                        self._reconnect_delay,
+                        type(ex).__name__,
+                        ex
+                    )
                 # Can also raise CancelledError, which is fine.
                 await asyncio.sleep(self._reconnect_delay, loop=self._loop)
 

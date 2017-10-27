@@ -39,9 +39,8 @@ class AuthError(Exception):
 
 
 class Identity(object):
-    """Simple manager for app's auth/handshake data.
-    """
-    DEFAULT_LOGGER_NAME = "pagent.Identity"
+    """Simple manager for app's auth/handshake data."""
+    DEFAULT_LOGGER_NAME = 'pagent.Identity'
 
     @classmethod
     def get_token(cls, handshake):
@@ -56,8 +55,7 @@ class Identity(object):
 
     @classmethod
     def get_uid(cls, handshake):
-        """Extract uid from the handshake.
-        """
+        """Extract uid from the handshake."""
         # Uid should always present, no additional checks.
         return handshake[KEY_AUTH][KEY_UID]
 
@@ -79,26 +77,22 @@ class Identity(object):
 
     @property
     def uid(self):
-        """Get the application instance uid.
-        """
+        """Get the application instance uid."""
         return self._uid
 
     @property
     def name(self):
-        """Get the application instance name.
-        """
+        """Get the application instance name."""
         return self._name
 
     def get_client_handshake(self):
-        """Compose handshake to use in active (client) connections.
-        """
+        """Compose handshake to use in active (client) connections."""
         handshake = self.get_server_handshake()
         handshake[KEY_AUTH][KEY_TOKEN] = self._client_token
         return handshake
 
     def get_server_handshake(self):
-        """Compose handshake to use in passive (server) connections.
-        """
+        """Compose handshake to use in passive (server) connections."""
         return {
             KEY_AUTH: {
                 KEY_UID: self._uid,
@@ -109,8 +103,7 @@ class Identity(object):
         }
 
     def validate_incoming_handshake(self, handshake):
-        """Validate incoming handshake on a passive connection.
-        """
+        """Validate incoming handshake on a passive connection."""
         if not isinstance(handshake, dict):
             raise TypeError('handshake data expected to be a dict')
         auth_data = handshake.get(KEY_AUTH)

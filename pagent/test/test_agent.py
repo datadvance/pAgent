@@ -21,11 +21,15 @@
 # SOFTWARE.
 #
 
-import asyncio
+import filecmp
 import http
 import io
 import logging
+import os
+import pathlib
+import pickle
 import sys
+import tarfile
 import uuid
 
 import multidict
@@ -68,6 +72,92 @@ async def http_read_response(call):
     return status, headers, body
 
 
+async def download_file(connection, job_uid, filename, decode=True):
+    async with connection.call_istream(
+        agent_service.AgentService.file_download.__name__,
+        [job_uid, filename]
+    ) as call:
+        header = await call.stream.receive()
+        if header is None:
+            await call.result
+        data = await read_from_stream(call.stream)
+        bytes_sent = await call.result
+        assert bytes_sent == len(data)
+        if decode:
+            return data.decode(sys.stdout.encoding)
+        else:
+            return data
+
+
+async def job_output(connection, job_uid, logger):
+    SEPARATOR = '-' * 40
+    stdout = await download_file(
+        connection,
+        job_uid,
+        jobs.Job.FILENAME_STDOUT
+    )
+    logger.info(
+        'Job stdout:\n%s\n%s',
+        SEPARATOR,
+        stdout
+    )
+    logger.info('End of job stdout\n%s', SEPARATOR)
+    stderr = await download_file(
+        connection,
+        job_uid,
+        jobs.Job.FILENAME_STDERR
+    )
+    logger.info(
+        'Job stderr:\n%s\n%s',
+        SEPARATOR,
+        stderr
+    )
+    logger.info('End of job stderr\n%s', SEPARATOR)
+    return stdout, stderr
+
+
+async def get_environment(agent_process, env, properties):
+    async with agent_process('--set', 'properties=' + repr(properties)) as agent:
+        # Create a job.
+        job_info = await agent.connection.call_simple(
+            agent_service.AgentService.job_create.__name__
+        )
+        job_uid = job_info['uid']
+        try:
+            await agent.connection.call_simple(
+                agent_service.AgentService.job_start.__name__,
+                job_uid,
+                [
+                    sys.executable, '-c',
+                    'import os, pickle; '
+                    'pickle.dump(dict(os.environ), open("env.pickle", "wb")); '
+                    'print("Successfull environment dump")'
+                ],
+                env,
+                port_expected_count=0,
+                forward_stdout=False
+            )
+            await agent.connection.call_simple(
+                agent_service.AgentService.job_wait.__name__,
+                job_uid
+            )
+            await job_output(
+                agent.connection,
+                job_uid,
+                logging.getLogger('EnvironmentJob')
+            )
+            job_env = pickle.loads(
+                await download_file(
+                    agent.connection, job_uid, 'env.pickle', decode=False
+                )
+            )
+            return job_env
+        finally:
+            await agent.connection.call_simple(
+                agent_service.AgentService.job_remove.__name__, job_uid
+            )
+
+
 class HTTPServerJob(object):
     ROUTE_HELLO = '/'
     ROUTE_QUERY_ECHO = '/query_echo'
@@ -99,7 +189,9 @@ class HTTPServerJob(object):
         # Start the job.
         await self._connection.call_simple(
             agent_service.AgentService.job_start.__name__,
-            self._job_uid, self._command_args, None, 1
+            self._job_uid, self._command_args, None,
+            port_expected_count=1,
+            forward_stdout=False
         )
         return self
 
@@ -110,36 +202,11 @@ class HTTPServerJob(object):
             self._job_uid,
             self.ROUTE_SHUTDOWN
         )
-        # Download the stdout.
-        async with self._connection.call_istream(
-            agent_service.AgentService.file_download.__name__,
-            [self._job_uid, jobs.Job.FILENAME_STDOUT]
-        ) as call:
-            header = await call.stream.receive()
-            data = await read_from_stream(call.stream)
-            bytes_sent = await call.result
-            assert bytes_sent == len(data)
-            captured_stdout = data.decode(sys.stdout.encoding)
-            self._log.info(
-                'Server stdout (%.2f Kb):\n%s\n%s',
-                len(data) / 1024., '-' * 40, captured_stdout
-            )
-            self._log.info('End of server stdout\n%s', '-' * 40)
-        # Download the stderr.
-        async with self._connection.call_istream(
-            agent_service.AgentService.file_download.__name__,
-            [self._job_uid, jobs.Job.FILENAME_STDERR]
-        ) as call:
-            header = await call.stream.receive()
-            data = await read_from_stream(call.stream)
-            bytes_sent = await call.result
-            assert bytes_sent == len(data)
-            captured_stderr = data.decode(sys.stdout.encoding)
-            self._log.info(
-                'Server stderr (%.2f Kb):\n%s\n%s',
-                len(data) / 1024., '-' * 40, captured_stderr
-            )
-            self._log.info('End of server stderr\n%s', '-' * 40)
+        await job_output(
+            self._connection,
+            self._job_uid,
+            self._log
+        )
         # Remove job (and its workdir).
         await self._connection.call_simple(
             agent_service.AgentService.job_remove.__name__,
@@ -175,38 +242,6 @@ async def test_handshake(event_loop, agent_process):
             handshake_data=handshake
         )
 
-        # TODO: duplicate uid are allowed for now.
-        # Review after router gets more stable.
-        return
-
-        # Valid token, but duplicate client uid.
-        with pytest.raises(prpc.RpcConnectionClosedError):
-            second_connection = prpc.Connection()
-            await prpc.platform.ws_aiohttp.connect(
-                second_connection, str(agent.endpoint_agent),
-                handshake_data=handshake
-            )
-        # Close first connection and wait for ability to reconnect.
-        #
-        # TODO: should be updated if connection manger is taught to
-        # wait for connection to die out.
-        await connection.close()
-        RECONNECT_TIMEOUT = 10.
-        RECONNECT_DELAY = 0.1
-        reconnect_start = event_loop.time()
-        while event_loop.time() - reconnect_start < RECONNECT_TIMEOUT:
-            await asyncio.sleep(RECONNECT_DELAY, loop=event_loop)
-            try:
-                await prpc.platform.ws_aiohttp.connect(
-                    second_connection, str(agent.endpoint_agent),
-                    handshake_data=handshake
-                )
-                break
-            except prpc.RpcConnectionClosedError:
-                continue
-        assert second_connection.connected
-        await second_connection.close()
-
 
 @pytest.mark.async_test
 async def test_run_script(event_loop, agent_process):
@@ -215,7 +250,6 @@ async def test_run_script(event_loop, agent_process):
     SCRIPT_NAME = 'run.py'
     SCRIPT_OUTPUT = 'it seems to work'
     SCRIPT_BODY = '''print('%s', end='')''' % (SCRIPT_OUTPUT,)
-    READ_CHUNK_SIZE = 3
     async with agent_process() as agent:
         # Create a job.
         job_info = await agent.connection.call_simple(
@@ -238,25 +272,21 @@ async def test_run_script(event_loop, agent_process):
         # Start the job.
         await agent.connection.call_simple(
             agent_service.AgentService.job_start.__name__,
-            job_info['uid'], [sys.executable, SCRIPT_NAME], None, 0
+            job_info['uid'], [sys.executable, SCRIPT_NAME], None,
+            port_expected_count=0,
+            forward_stdout=False
         )
         # Wait until it is completed.
         await agent.connection.call_simple(
             agent_service.AgentService.job_wait.__name__,
             job_info['uid']
         )
-        # Download the stdout.
-        async with agent.connection.call_istream(
-            agent_service.AgentService.file_download.__name__,
-            [job_info['uid'], jobs.Job.FILENAME_STDOUT],
-            {"chunk_size": READ_CHUNK_SIZE}
-        ) as call:
-            header = await call.stream.receive()
-            data = await read_from_stream(call.stream, READ_CHUNK_SIZE)
-            bytes_sent = await call.result
-            assert bytes_sent == len(data)
-            captured_stdout = data.decode(sys.stdout.encoding)
-            assert captured_stdout == SCRIPT_OUTPUT
+        stdout, _ = await job_output(
+            agent.connection,
+            job_info['uid'],
+            logging.getLogger('Script')
+        )
+        assert stdout == SCRIPT_OUTPUT
         # Remove job (and its workdir).
         await agent.connection.call_simple(
             agent_service.AgentService.job_remove.__name__,
@@ -370,8 +400,8 @@ async def test_server_ws_echo(event_loop, agent_process,
     ECHO_DATA = (
         uuid.uuid4().bytes,
         uuid.uuid4().hex,
-        b"",
-        ""
+        b'',
+        ''
     )
     async with agent_process() as agent:
         http_job = HTTPServerJob(agent.connection, http_server_command())
@@ -417,7 +447,7 @@ async def test_server_ws_rejected(event_loop, agent_process,
                                   http_server_command):
     """Test WS proxy features - failed/rejected connection."""
     PATHS = [
-        # Endpoint doesn't exists.
+        # Endpoint doesn't exist.
         '/does_not_exist',
         # GET endpoint without WS support.
         HTTPServerJob.ROUTE_HELLO,
@@ -439,3 +469,123 @@ async def test_server_ws_rejected(event_loop, agent_process,
                     assert call.stream.is_closed
                     with pytest.raises(prpc.RpcMethodError):
                         await call.result
+
+
+@pytest.mark.async_test
+async def test_environment(event_loop, agent_process):
+    """Test environment variables mapping (as command args and as properties).
+    """
+    TEST_ENV = {
+        'ASCII FOREVER 1': 'ASCII FOREVER',
+        'ASCII FOREVER 2': 'ЮНИКОД großer',
+        'ЮНИКОД èüîû 1 god why': 'ASCII FOREVER',
+        'ЮНИКОД èüîû 2 god why': 'ЮНИКОД großer èüîû god why',
+    }
+    # Win32 env is case-insensitive, all variables will be uppercased by system.
+    if sys.platform == 'win32':
+    	TEST_ENV = {k.upper(): v for (k, v) in TEST_ENV.items()}
+    job_env = await get_environment(
+        agent_process, TEST_ENV, TEST_ENV
+    )
+    # Properties are mapped with prefix.
+    properties_env = {
+        k[len(jobs.JobManager.PREFIX_PROPERTIES):]: v
+        for (k, v) in job_env.items()
+        if k.startswith(jobs.JobManager.PREFIX_PROPERTIES)
+    }
+    # Command env is added directly.
+    assert properties_env == TEST_ENV
+    for key, value in TEST_ENV.items():
+        assert job_env[key] == value
+
+
+@pytest.mark.async_test
+async def test_archive_upload_download(event_loop, agent_process, tmpdir):
+    async def get_archive(path, include_mask=None,
+                          exclude_mask=None, compress=False):
+        path = str(path)
+        arcpath = path + '.tar'
+        async with agent.connection.call_istream(
+            agent_service.AgentService.archive_download.__name__,
+            [job_info['uid'], include_mask, exclude_mask, compress]
+        ) as call:
+            header = await call.stream.receive()
+            if header is None:
+                await call.result
+            data = await read_from_stream(call.stream)
+            with open(arcpath, 'wb') as arc:
+                arc.write(data)
+        # Unpack it.
+        with tarfile.open(arcpath, 'r') as arc:
+            arc.extractall(path)
+
+    def compare_dirs(lhs, rhs):
+        assert os.path.isdir(lhs)
+        assert os.path.isdir(rhs)
+        dircmp = filecmp.dircmp(lhs, rhs)
+        assert not dircmp.left_only
+        assert not dircmp.right_only
+        for filename in dircmp.common_files:
+            with open(lhs.joinpath(filename), 'rb') as lhs_file:
+                with open(rhs.joinpath(filename), 'rb') as rhs_file:
+                    assert lhs_file.read() == rhs_file.read()
+        for dirname in dircmp.common_dirs:
+            compare_dirs(lhs.joinpath(dirname), rhs.joinpath(dirname))
+    # Generate test files.
+    DATA_PATH = pathlib.Path(tmpdir.mkdir('data'))
+    FILES = [
+        'something.py',
+        'whatever.dat',
+        'großer/stuff.txt',
+        'nested/èüîû god why.py'
+    ]
+    UPLOAD_PATH = pathlib.Path(tmpdir.join('upload.tar'))
+    DOWNLOAD_FULL = pathlib.Path(tmpdir.join('download_full'))
+    DOWNLOAD_INCLUDE_PY = pathlib.Path(tmpdir.join('download_py'))
+    DOWNLOAD_EXCLUDE = pathlib.Path(tmpdir.join('download_exclude'))
+    for filename in FILES:
+        target = DATA_PATH.joinpath(filename)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, 'w') as target_file:
+            target_file.write(uuid.uuid4().hex * 10)
+    with tarfile.open(UPLOAD_PATH, 'w') as arc:
+        for file_path in DATA_PATH.iterdir():
+            arc.add(file_path, arcname=file_path.name)
+    async with agent_process() as agent:
+        # Create a job.
+        job_info = await agent.connection.call_simple(
+            agent_service.AgentService.job_create.__name__
+        )
+        # Upload archive.
+        async with agent.connection.call_ostream(
+            agent_service.AgentService.archive_upload.__name__,
+            [job_info['uid']]
+        ) as call:
+            with open(UPLOAD_PATH, 'rb') as archive:
+                await call.stream.send(archive.read())
+            await call.result
+        # Download full archive.
+        await get_archive(DOWNLOAD_FULL, compress=True)
+        compare_dirs(DOWNLOAD_FULL, DATA_PATH)
+
+        # Download filtered archive.
+        await get_archive(DOWNLOAD_INCLUDE_PY, '*.py')
+        files_to_remove = (
+            set(FILES) - set(['something.py', 'nested/èüîû god why.py'])
+        )
+        for filtered_file in files_to_remove:
+            path = DATA_PATH.joinpath(filtered_file)
+            path.unlink()
+            if not os.listdir(path.parent):
+                path.parent.rmdir()
+        compare_dirs(DOWNLOAD_INCLUDE_PY, DATA_PATH)
+
+        await get_archive(DOWNLOAD_EXCLUDE, '*.py', 'something*')
+        DATA_PATH.joinpath('something.py').unlink()
+        compare_dirs(DOWNLOAD_EXCLUDE, DATA_PATH)
+
+        # Remove job (and its workdir).
+        await agent.connection.call_simple(
+            agent_service.AgentService.job_remove.__name__,
+            job_info['uid']
+        )

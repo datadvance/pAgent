@@ -23,9 +23,14 @@
 
 import asyncio
 import enum
+import fnmatch
 import http
+import itertools
 import os
 import pathlib
+import stat
+import tarfile
+import uuid
 
 import aiohttp
 import multidict
@@ -47,8 +52,7 @@ class WSMessageDirection(enum.Enum):
 
 
 class AgentService(object):
-    """Implementation of RPC methods provided by agent.
-    """
+    """Implementation of RPC methods provided by agent."""
     LOCALHOST_BASE_URL = yarl.URL('http://127.0.0.1')
     WS_PROXY_EVENT_QUEUE_DEPTH = 16
     MAX_FILE_CHUNK_SIZE = 1024 * 1024
@@ -93,7 +97,9 @@ class AgentService(object):
         return self._job_info(job_uid)
 
     @prpc.method
-    async def job_start(self, ctx, job_uid, args, env, port_expected_count=1):
+    async def job_start(self, ctx, job_uid, args, env,
+                        cwd=None, port_expected_count=1,
+                        forward_stdout=False):
         """Start a command inside a job.
 
         Args:
@@ -101,13 +107,16 @@ class AgentService(object):
             job_uid: Job id.
             args: Command line arguments (list of strings).
             env: Environment variables to add.
+            cwd: Path to job working directory, must be relative.
             port_expected_count: Number of listen ports to expect.
+            forward_stdout: Forward process stdout to agent's output,
+                otherwise write it to files inside job dir.
 
         Note:
             Proxy features only work for jobs with port_expected_count==1.
         """
         await self._job_manager.job_start(
-            job_uid, args, env, port_expected_count
+            job_uid, args, env, cwd, port_expected_count, forward_stdout
         )
         return self._job_info(job_uid)
 
@@ -131,8 +140,7 @@ class AgentService(object):
         return self._job_manager.job_count_by_connection(ctx.connection.id)
 
     def _job_info(self, job_uid):
-        """Aux - return job info as JSON.
-        """
+        """Aux - return job info as JSON."""
         info = self._job_manager.job_info(job_uid)
         return {
             'uid': info.uid,
@@ -258,9 +266,7 @@ class AgentService(object):
                 # More to that, it would be in spirit of aiohttp
                 # to start raising exceptions on seeing it.
                 headers.popall('Sec-WebSocket-Key', None)
-                websocket = await session.ws_connect(
-                    url, headers=headers
-                )
+                websocket = await session.ws_connect(url, headers=headers)
                 await ctx.stream.send(True)
             except Exception:
                 await ctx.stream.send(False)
@@ -306,8 +312,7 @@ class AgentService(object):
             )
 
     async def _ws_listen(self, websocket, event_queue):
-        """Aux - put all messages from the job websocket to the event queue.
-        """
+        """Aux - put all messages from the job websocket to the event queue."""
         async for msg in websocket:
             if msg.type not in (aiohttp.WSMsgType.BINARY,
                                 aiohttp.WSMsgType.TEXT):
@@ -316,14 +321,13 @@ class AgentService(object):
         await event_queue.put((WSMessageDirection.JOB_TO_CLIENT, None))
 
     async def _stream_listen(self, stream, event_queue):
-        """Aux - put all messages from the rpc stream to the event queue.
-        """
+        """Aux - put all messages from the rpc stream to the event queue."""
         async for msg in stream:
             await event_queue.put((WSMessageDirection.CLIENT_TO_JOB, msg))
         await event_queue.put((WSMessageDirection.CLIENT_TO_JOB, None))
 
     @prpc.method
-    async def file_upload(self, ctx, job_uid, filename):
+    async def file_upload(self, ctx, job_uid, filename, executable=False):
         """Receive a file from a client.
 
         File content is transferred using prpc streaming.
@@ -332,21 +336,27 @@ class AgentService(object):
             ctx: prpc call context.
             job_uid: Job uid identifying the sandbox to put the file in.
             filename: File name relative to the job sandbox.
+            executable: Toggle setting the executable flag on the file.
         """
         assert ctx.call_type == prpc.CallType.OSTREAM
         if pathlib.PurePath(filename).is_absolute():
             raise ValueError('file path must be relative')
-        job_workdir = self._job_manager.job_workdir(job_uid)
-        target_path = job_workdir.joinpath(filename)
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(target_path, 'wb') as target_file:
-            async for chunk in ctx.stream:
-                target_file.write(chunk)
-            return target_file.tell()
+        job_sandbox = self._job_manager.job_sandbox(job_uid)
+        target_path = job_sandbox.joinpath(filename)
+        accepted_size = await self._accept_file(ctx, target_path)
+        if executable:
+            os.chmod(
+                target_path,
+                (
+                    os.stat(target_path).st_mode |
+                    stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+                )
+            )
+        return accepted_size
 
     @prpc.method
-    async def file_download(self, ctx, job_uid,
-                            filename, chunk_size=64*1024):
+    async def file_download(self, ctx, job_uid, filename,
+                            chunk_size=64*1024, remove=False):
         """Send a requested file to a client.
 
         File content is transferred using prpc streaming.
@@ -356,26 +366,158 @@ class AgentService(object):
             job_uid: Job uid identifying the sandbox with the file.
             filename: File name relative to the job sandbox.
             chunk_size: Max chunk size for a single message.
+            remove: Remove file after downloading.
         """
         assert ctx.call_type == prpc.CallType.ISTREAM
         assert chunk_size > 0
         if pathlib.PurePath(filename).is_absolute():
             raise ValueError('file path must be relative')
+        job_sandbox = self._job_manager.job_sandbox(job_uid)
+        target_path = job_sandbox.joinpath(filename)
+        return await self._send_file(ctx, target_path, chunk_size, remove)
+
+    @prpc.method
+    async def archive_upload(self, ctx, job_uid):
+        """Receive a tar archive from client and unpack it to job sandbox.
+
+        Args:
+            ctx: prpc call context.
+            job_uid: Job uid identifying the sandbox to put the file in.
+            filename: File name relative to the job sandbox.
+        """
+        archive_path = self._job_manager.session_root.joinpath(
+            'upload_' + uuid.uuid4().hex
+        )
+        job_sandbox = self._job_manager.job_sandbox(job_uid)
+        arc_size = await self._accept_file(ctx, archive_path)
+        try:
+            await ctx.loop.run_in_executor(
+                None,
+                self._unpack_archive,
+                archive_path,
+                job_sandbox
+            )
+        except:
+            if os.path.exists(archive_path):
+                os.remove(archive_path)
+            raise
+        os.remove(archive_path)
+        return arc_size
+
+    @prpc.method
+    async def archive_download(self, ctx, job_uid,
+                               include_mask=None, exclude_mask=None,
+                               compress=False, chunk_size=64*1024):
+        """Send a requested file to a client.
+
+        File content is transferred using prpc streaming.
+
+        Args:
+            ctx: prpc call context.
+            job_uid: Job uid identifying the sandbox with the file.
+            include_mask: If set, includes only files matching the mask.
+            exclude_mask: If set, excludes any files matching. Has a priority
+                over the include mask.
+            chunk_size: Max chunk size for a single message.
+        """
+        archive_path = self._job_manager.session_root.joinpath(
+            'download_' + uuid.uuid4().hex
+        )
+        job_sandbox = self._job_manager.job_sandbox(job_uid)
+        try:
+            await ctx.loop.run_in_executor(
+                None,
+                self._make_archive,
+                archive_path,
+                job_sandbox,
+                include_mask,
+                exclude_mask,
+                compress
+            )
+        except:
+            if os.path.exists(archive_path):
+                os.remove(archive_path)
+            raise
+        return await self._send_file(ctx, archive_path, chunk_size, True)
+
+    def _make_archive(self, archive_path, root,
+                      include_mask, exclude_mask, compress):
+        mode = 'x:gz' if compress else 'x'
+        with tarfile.open(archive_path, mode) as arc:
+            # Note: ignores empty directories.
+            # Avoiding this is quite problematic.
+            for base, dirs, files in os.walk(root):
+                for filename in itertools.chain(dirs, files):
+                    full_path = os.path.join(base, filename)
+                    relpath = os.path.relpath(full_path, root)
+                    add_to_arc = True
+                    if include_mask:
+                        add_to_arc = fnmatch.fnmatch(relpath, include_mask)
+                    if add_to_arc and exclude_mask:
+                        add_to_arc = not fnmatch.fnmatch(
+                            relpath, exclude_mask
+                        )
+                    if add_to_arc:
+                        arc.add(full_path, arcname=relpath, recursive=False)
+
+    def _unpack_archive(self, archive_path, unpack_to):
+        CHUNK_SIZE = 65536
+        directory_time = os.name == 'posix'
+        with tarfile.open(archive_path, 'r') as arc:
+            dirs = []
+            entry = arc.next()
+            while entry:
+                if os.path.isabs(entry.name):
+                    raise ValueError('absolute paths found in archive')
+                dst_path = unpack_to.joinpath(entry.name)
+                # Manual unpack to avoid file ownership issues.
+                #
+                # Note: Symlinks and weirder entry types are ignored.
+                if entry.isfile():
+                    dst_path.parent.mkdir(parents=True, exist_ok=True)
+                    with arc.extractfile(entry) as src:
+                        with open(dst_path, 'wb') as dst:
+                            chunk = src.read(CHUNK_SIZE)
+                            while chunk:
+                                dst.write(chunk)
+                                chunk = src.read(CHUNK_SIZE)
+                    os.utime(dst_path, (entry.mtime, entry.mtime))
+                    os.chmod(dst_path, entry.mode)
+                elif entry.isdir():
+                    dst_path.mkdir(parents=True, exist_ok=True)
+                    dirs.append(dst_path)
+                if directory_time:
+                    dirs.sort(reverse=True)
+                    for directory in dirs:
+                        os.utime(directory, (entry.mtime, entry.mtime))
+
+                entry = arc.next()
+
+    async def _accept_file(self, ctx, target_path):
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(target_path, 'wb') as target_file:
+            async for chunk in ctx.stream:
+                target_file.write(chunk)
+            return target_file.tell()
+
+    async def _send_file(self, ctx, target_path, chunk_size, remove):
+        assert ctx.call_type == prpc.CallType.ISTREAM
+        assert chunk_size > 0
         chunk_size = min(chunk_size, self.MAX_FILE_CHUNK_SIZE)
-        job_workdir = self._job_manager.job_workdir(job_uid)
-        target_path = job_workdir.joinpath(filename)
+        file_size = 0
         with open(target_path, 'rb') as target_file:
             target_file.seek(0, os.SEEK_END)
             file_size = target_file.tell()
             target_file.seek(0, os.SEEK_SET)
-            await ctx.stream.send({
-                'size': file_size
-            })
+            await ctx.stream.send({'size': file_size})
             chunk = target_file.read(chunk_size)
             while chunk:
                 await ctx.stream.send(chunk)
                 chunk = target_file.read(chunk_size)
-            return target_file.tell()
+            file_size = target_file.tell()
+        if remove:
+            target_path.unlink()
+        return file_size
 
     def _get_sender(self, connection):
         auth_data = connection.handshake_data[identity.KEY_AUTH]

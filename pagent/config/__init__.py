@@ -44,9 +44,9 @@ def initialize():
             key, value = arg.split('=', 2)
             try:
                 value = ast.literal_eval(value)
-            except Exception as ex:
+            except Exception:
                 raise ValueError(
-                    'invalid value for config key "%s"' % (key,)
+                    'invalid value for config key \'%s\'' % (key,)
                 )
             config_path = key.split('.')
             config_node = config
@@ -54,6 +54,11 @@ def initialize():
                 config_node = config[key_element]
             config_node[config_path[-1]] = value
         _validate_schema(config, 'invalid command line config parameter')
+    if args.property:
+        for arg in args.property:
+            key, value = arg.split('=', 2)
+            config['properties'][key] = value
+        _validate_schema(config, 'invalid command line properties parameter')
     return args, config
 
 

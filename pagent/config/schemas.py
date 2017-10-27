@@ -168,7 +168,7 @@ JOBS = fixed_object(
 PROPERTIES = {
     'type': 'object',
     'patternProperties': {
-        '.*': {'type': 'string'}
+        '.+': {'type': 'string'}
     },
     'additionalProperties': False,
     'description': (

@@ -52,18 +52,12 @@ LOGGER_NAME_JOB_SERVER = '.'.join((LOGGER_NAME_ROOT, 'JobServer'))
 
 
 def setup_logging(args):
-    """Configure the logging facilities.
-    """
+    """Configure the logging facilities."""
     root_logger = logging.getLogger()
     # root logger accepts all messages, filter on handlers level
     root_logger.setLevel(logging.DEBUG)
     for handler in [logging.StreamHandler(sys.stdout)]:
-        handler.setFormatter(
-            logging.Formatter(
-                '[%(process)d] [%(asctime)s] '
-                '[%(name)s] [%(levelname)s] %(message)s'
-            )
-        )
+        handler.setFormatter(logging.Formatter(args.log_format))
         handler.setLevel(args.log_level.upper())
         root_logger.addHandler(handler)
 
@@ -85,8 +79,7 @@ class ExitHandler(object):
         self._exit_code = 0
 
     def __call__(self, exit_code=0):
-        """Submit exit task to the event loop. Ignores multiple calls.
-        """
+        """Submit exit task to the event loop. Ignores multiple calls."""
         if self._exit_sent:
             self._log.debug('Exit in progress, exit request ignored')
             return
@@ -96,15 +89,13 @@ class ExitHandler(object):
         self._exit_code = exit_code
 
     async def wait(self):
-        """If exit task is active, wait for it to finish.
-        """
+        """If exit task is active, wait for it to finish."""
         if self._exit_task:
             await self._exit_task
         return self._exit_code
 
     async def _loop_exit(self):
-        """Actual exit/cleanup implementation.
-        """
+        """Actual exit/cleanup implementation."""
         for client in self._clients:
             await client.stop()
         # Cleanup current connections.
@@ -122,8 +113,7 @@ class ExitHandler(object):
 
 
 def make_signal_handler(exit_handler, loop):
-    """Wrap app exit handler as a signal handler.
-    """
+    """Wrap app exit handler as a signal handler."""
     def on_exit(signo, frame):
         """Signal handler."""
         # Surprisingly enough, threadsafe loop API is not only 'safe'
@@ -140,8 +130,7 @@ def make_signal_handler(exit_handler, loop):
 
 
 def configure_loop(config, main_log):
-    """Return the configured asyncio loop.
-    """
+    """Return the configured asyncio loop."""
     loop = asyncio.get_event_loop()
     thread_count = config['jobs']['background_threads']
     main_log.debug('Using %d background threads', thread_count)
@@ -154,10 +143,9 @@ def configure_loop(config, main_log):
 
 
 async def run(args, config, main_log, loop):
-    """Application bootstrap.
-    """
+    """Application bootstrap."""
     job_manager = pagent.jobs.JobManager(
-        workdir_root=config['jobs']['root'],
+        temp_root=config['jobs']['root'],
         properties=config['properties'],
         loop=loop
     )
@@ -280,19 +268,13 @@ async def run(args, config, main_log, loop):
             )
             await client.start()
 
-        signal.signal(
-            signal.SIGINT,
-            make_signal_handler(
-                exit_handler, loop
-            )
-        )
+        signal.signal(signal.SIGINT, make_signal_handler(exit_handler, loop))
         await asyncio.wait(lifetime_tasks, loop=loop)
         return await exit_handler.wait()
 
 
 def main():
-    """Entry point.
-    """
+    """Entry point."""
     args, config = pagent.config.initialize()
     setup_logging(args)
     pagent.config.validate(config)

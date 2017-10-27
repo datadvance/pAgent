@@ -29,6 +29,7 @@ from . import utils
 
 
 def parse(args=None):
+    """Parse command line arguments and return resulting namespace."""
     parser = argparse.ArgumentParser(
         description='pAgent - remote process manager and reverse proxy.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -42,16 +43,30 @@ def parse(args=None):
         help='output log level'
     )
     parser.add_argument(
-      '--connection-debug', action='store_true',
-      default=False,
-      help='enable additional debug output for RPC connections'
+        '--log-format',
+        default=(
+            '[%(process)d] [%(asctime)s] [%(name)s] [%(levelname)s] %(message)s'
+        ),
+        help='log format string'
     )
     parser.add_argument(
-      '--set', action='append',
-      help=(
-        'set config parameter, format is \'config_key=value\', '
-        'values are interpreted as python literals, '
-        'may appear multiple times'
-      )
+        '--connection-debug', action='store_true',
+        default=False,
+        help='enable additional debug output for RPC connections'
+    )
+    parser.add_argument(
+        '--set', action='append',
+        help=(
+            'set config parameter, format is \'config_key=value\', '
+            'values are interpreted as python literals, '
+            'may appear multiple times'
+        )
+    )
+    parser.add_argument(
+        '--property', action='append',
+        help=(
+            'set property as environment variable, format is \'name=value\', '
+            'values are interpreted as strings, may appear multiple times'
+        )
     )
     return parser.parse_args(args)

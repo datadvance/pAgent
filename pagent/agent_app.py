@@ -27,7 +27,7 @@ from . import handlers
 
 
 # Route listening for incoming RPC connections.
-ROUTE_RPC_SERVER = "/rpc/v1"
+ROUTE_RPC_SERVER = '/rpc/v1'
 
 
 ROUTES = [
@@ -35,8 +35,7 @@ ROUTES = [
 ]
 
 
-def get_application(agent_service, connection_manager,
-                    identity, logger):
+def get_application(agent_service, connection_manager, identity, logger):
     app = aiohttp.web.Application(logger=logger)
     app[handlers.rpc.KEY_AGENT_SERVICE] = agent_service
     app[handlers.common.KEY_CONN_MANAGER] = connection_manager

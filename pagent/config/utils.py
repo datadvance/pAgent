@@ -25,10 +25,8 @@
 import io
 
 
-def config_description(schema, header='Config parameters:\n\n',
-                       indent='  '):
-    """Generate config parameters description from JSON-schema.
-    """
+def config_description(schema, header='Config parameters:\n\n', indent='  '):
+    """Generate config parameters description from JSON-schema."""
     assert isinstance(schema, dict)
     assert schema['type'] == 'object'
     buffer = io.StringIO()

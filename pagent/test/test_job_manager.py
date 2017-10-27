@@ -36,7 +36,7 @@ from pagent import job_app
 @pytest.fixture(scope='function')
 def manager(tmpdir, event_loop):
     return jobs.JobManager(
-        workdir_root=tmpdir,
+        temp_root=tmpdir,
         loop=event_loop
     )
 
@@ -55,18 +55,18 @@ async def test_run_job(event_loop, manager, mock_server_command):
                 '==token=='
             )
         )
-        workdir = manager.job_workdir(uid)
+        sandbox = manager.job_sandbox(uid)
         assert manager.job_port(uid) is None
-        assert workdir.exists()
+        assert sandbox.exists()
         await manager.job_start(
-            uid, mock_server_command(exit_delay=EXIT_DELAY), {}, 0
+            uid, mock_server_command(exit_delay=EXIT_DELAY), {}, 0, False
         )
         assert manager.job_port(uid) is None
         while manager.job_info(uid).state == jobs.JobState.RUNNING:
             await asyncio.sleep(EXIT_POLL_DELAY)
         assert manager.job_info(uid).state == jobs.JobState.FINISHED
         assert manager.job_port(uid) is None
-        assert workdir.joinpath(jobs.Job.FILENAME_STDOUT).exists()
-        assert workdir.joinpath(jobs.Job.FILENAME_STDERR).exists()
+        assert sandbox.joinpath(jobs.Job.FILENAME_STDOUT).exists()
+        assert sandbox.joinpath(jobs.Job.FILENAME_STDERR).exists()
         await manager.job_remove(uid)
-        assert not workdir.exists()
+        assert not sandbox.exists()

@@ -42,8 +42,7 @@ ROUTES = [
 
 def get_application(job_manager, connection_manager,
                     identity, exit_handler, logger):
-    """Creates the control web application for agent administration.
-    """
+    """Creates the control web application for agent administration."""
     app = aiohttp.web.Application(logger=logger)
     app[handlers.common.KEY_CONN_MANAGER] = connection_manager
     app[handlers.common.KEY_IDENTITY] = identity

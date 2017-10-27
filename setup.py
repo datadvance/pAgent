@@ -1,5 +1,27 @@
 #!/usr/bin/env python
 
+#
+# coding: utf-8
+# Copyright (c) 2017 DATADVANCE
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+# OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 import os
 import setuptools
 
@@ -14,7 +36,7 @@ setuptools.setup(
     name='pAgent',
     description='Remotely controller job manager with embedded http proxy.',
     long_description=README,
-    version='0.5.0',
+    version='0.6.0',
     url='https://github.com/datadvance/pAgent',
 
     # Author details.
@@ -36,23 +58,10 @@ setuptools.setup(
     # Dependencies required to make package function properly.
     packages=setuptools.find_packages(exclude=['test', 'doc']),
     install_requires=[
-        'pRpc>=1.0.0',
+        'pRpc>=1.1.0',
         'aiohttp>=2.2',
         'jsonschema',
         'psutil',
         'pyyaml',
-    ],
-
-    # Test dependencies and settings to run `python setup.py test`.
-    tests_require=[
-        'pytest',
-        'pytest-catchlog',
-        'pytest-pythonpath',
-    ],
-    # Use `pytest-runner` to integrate `pytest` with `setuptools` as it is
-    # described in the "Good Integration Practices" chapter in the pytest docs:
-    # https://docs.pytest.org/en/latest/goodpractices.html
-    setup_requires=[
-        'pytest-runner',
-    ],
+    ]
 )
