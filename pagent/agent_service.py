@@ -1,6 +1,6 @@
 #
 # coding: utf-8
-# Copyright (c) 2017 DATADVANCE
+# Copyright (c) 2018 DATADVANCE
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -34,11 +34,11 @@ import uuid
 
 import aiohttp
 import multidict
-import prpc
 import yarl
 
-from . import identity
-from . import jobs
+import prpc
+
+from . import identity, jobs
 
 
 @enum.unique
@@ -168,19 +168,19 @@ class AgentService(object):
             multidict.MultiDict(query)
         )
 
-        input_stream = aiohttp.StreamReader(loop=ctx.loop)
+        # using async generator for streaming upload (see aiohttp docs)
+        async def input_stream():
+            async for msg in ctx.stream:
+                if msg:
+                    yield msg
+                else:
+                    return
 
         task = ctx.loop.create_task(
             self._http_request(
-                url, method, headers, input_stream, ctx.stream
+                url, method, headers, input_stream(), ctx.stream
             )
         )
-        async for msg in ctx.stream:
-            if msg:
-                input_stream.feed_data(msg)
-            else:
-                break
-        input_stream.feed_eof()
         await task
 
     async def _http_request(self, url, method, headers,
@@ -257,6 +257,9 @@ class AgentService(object):
             #
             # https://github.com/aio-libs/aiohttp/issues/2053
             try:
+                ## @TODO: decide what to do with client headers,
+                # actually we can not just pass headers to job process
+                # at least we need to filter much more than filtered here
                 # Even if client supports WS extensions, aiohttp does not.
                 headers = multidict.CIMultiDict(headers)
                 headers.popall('Accept-Encoding', None)
@@ -266,6 +269,11 @@ class AgentService(object):
                 # More to that, it would be in spirit of aiohttp
                 # to start raising exceptions on seeing it.
                 headers.popall('Sec-WebSocket-Key', None)
+                # Do not show remote host to job
+                headers.popall('Host', None)
+                # We do not want to send any content, seems it freezes tornado
+                for k in [k for k in headers if k.startswith('Content')]:
+                    headers.popall(k, None)
                 websocket = await session.ws_connect(url, headers=headers)
                 await ctx.stream.send(True)
             except Exception:
@@ -279,7 +287,7 @@ class AgentService(object):
             # as it does not create new Tasks and async context switches.
             #
             # Websockets connections are likely to carry a lot of small
-            # messages, so this optmization is pretty important (~3x speedup).
+            # messages, so this optimization gives ~3x speedup.
             event_queue = asyncio.Queue(self.WS_PROXY_EVENT_QUEUE_DEPTH)
             ws_listen_task = ctx.loop.create_task(
                 self._ws_listen(websocket, event_queue)

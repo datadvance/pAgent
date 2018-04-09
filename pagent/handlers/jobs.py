@@ -1,6 +1,6 @@
 #
 # coding: utf-8
-# Copyright (c) 2017 DATADVANCE
+# Copyright (c) 2018 DATADVANCE
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -49,4 +49,3 @@ async def job_started(request):
             status=http.HTTPStatus.BAD_REQUEST,
             text=str(ex)
         )
-

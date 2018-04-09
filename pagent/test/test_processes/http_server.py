@@ -1,6 +1,6 @@
 #
 # coding: utf-8
-# Copyright (c) 2017 DATADVANCE
+# Copyright (c) 2018 DATADVANCE
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -21,8 +21,8 @@
 # SOFTWARE.
 #
 
-import asyncio
 import argparse
+import asyncio
 import html
 import http
 import io
@@ -176,7 +176,7 @@ async def ws_stream_handler(request):
     response = aiohttp.web.WebSocketResponse()
     await response.prepare(request)
     for _ in range(MSG_COUNT):
-        response.send_bytes(uuid.uuid4().bytes)
+        await response.send_bytes(uuid.uuid4().bytes)
     return response
 
 
@@ -224,19 +224,19 @@ def main():
     _, port = sock.getsockname()
 
     async def notify_agent():
-        url = yarl.URL(os.environ['DA_PAGENT_JOB_ENDPOINT']).with_query(
+        url = yarl.URL(os.environ['DA__PAGENT__JOB_ENDPOINT']).with_query(
             {
-                'job_id': os.environ['DA_PAGENT_JOB_ID'],
+                'job_id': os.environ['DA__PAGENT__JOB_ID'],
                 'port': str(port)
             }
         )
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
                 assert response.status == http.HTTPStatus.OK
-    if os.environ.get('DA_PAGENT_JOB_ENDPOINT'):
+    if os.environ.get('DA__PAGENT__JOB_ENDPOINT'):
         loop.run_until_complete(notify_agent())
 
-    aiohttp.web.run_app(app, sock=sock, loop=loop)
+    aiohttp.web.run_app(app, sock=sock)
 
 
 if __name__ == '__main__':

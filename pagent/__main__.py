@@ -1,6 +1,6 @@
 #
 # coding: utf-8
-# Copyright (c) 2017 DATADVANCE
+# Copyright (c) 2018 DATADVANCE
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -27,7 +27,6 @@ import logging
 import signal
 import sys
 
-import prpc
 import yarl
 
 import pagent.agent_app
@@ -36,9 +35,11 @@ import pagent.client
 import pagent.config
 import pagent.connection_manager
 import pagent.control_app
-import pagent.jobs
-import pagent.job_app
 import pagent.identity
+import pagent.job_app
+import pagent.jobs
+import prpc
+
 
 LOCALHOST_IP = '127.0.0.1'
 

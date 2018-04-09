@@ -1,6 +1,4 @@
-#
-# coding: utf-8
-# Copyright (c) 2018 DATADVANCE
+# Copyright (C) DATADVANCE, 2010-2018
 #
 # Permission is hereby granted, free of charge, to any person obtaining
 # a copy of this software and associated documentation files (the
@@ -21,9 +19,7 @@
 # TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-
-# Set up alias to `pytest` as described in the "Good Integration
-# Practices" chapter in the pytest docs:
-# https://docs.pytest.org/en/latest/goodpractices.html
-[aliases]
-test=pytest
+# Tools needed for the development process.
+pylint
+pytest
+-e .

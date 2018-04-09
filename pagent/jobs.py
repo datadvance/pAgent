@@ -1,6 +1,6 @@
 #
 # coding: utf-8
-# Copyright (c) 2017 DATADVANCE
+# Copyright (c) 2018 DATADVANCE
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -80,7 +80,7 @@ class JobManager(object):
     DEFAULT_LOG_NAME = 'pagent.JobManager'
     DEFAULT_JOB_NAME = '<unnamed job>'
 
-    PREFIX_PROPERTIES = 'DA_PAGENT_'
+    PREFIX_PROPERTIES = 'DA__PAGENT__'
 
     PROPERTY_JOB_ENDPOINT = 'JOB_ENDPOINT'
     PROPERTY_JOB_ID = 'JOB_ID'
@@ -105,7 +105,10 @@ class JobManager(object):
         self._state = JobManagerState.RUNNING
         # TODO: Jobs priority queue for cleanup?
         # TODO: As an idea, cleanup old session roots?
-        self._log.debug('Initialized, session sandbox: %s' % (self._session_root,))
+        self._log.debug('Initialized, session sandbox: %s', self._session_root)
+        self._log.debug('Properties:\n%s', '\n'.join([
+            '%s: %s' % (key, value) for key, value in self._properties.items()
+        ]))
 
     async def close(self):
         """Stop job manager disposing of all jobs.

@@ -1,6 +1,6 @@
 #
 # coding: utf-8
-# Copyright (c) 2017 DATADVANCE
+# Copyright (c) 2018 DATADVANCE
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -25,12 +25,11 @@ import asyncio
 import logging
 import pathlib
 
-import prpc
 import pytest
 import yarl
 
-from pagent import jobs
-from pagent import job_app
+import prpc
+from pagent import job_app, jobs
 
 
 @pytest.fixture(scope='function')

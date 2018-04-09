@@ -1,6 +1,6 @@
 #
 # coding: utf-8
-# Copyright (c) 2017 DATADVANCE
+# Copyright (c) 2018 DATADVANCE
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -29,14 +29,10 @@ import sys
 import uuid
 
 import aiohttp
-import prpc
 import yarl
 
-from pagent import agent_app
-from pagent import control_app
-from pagent import job_app
-from pagent import identity
-from pagent import polled_process
+import prpc
+from pagent import agent_app, control_app, identity, job_app, polled_process
 
 
 LOCALHOST_WS_URL = yarl.URL("ws://127.0.0.1")
@@ -178,6 +174,6 @@ class AgentProcess(object):
         self._port_control = None
         self._port_agent = None
         self._port_jobs = None
-        self._session.close()
+        await self._session.close()
         self._running = False
         return False
