@@ -1,12 +1,12 @@
 pAgent
 ======
 
-pAgent is crossplatform local job manager and HTTP/Websocket proxy. It uses 
+pAgent is crossplatform local job manager and HTTP/Websocket proxy. It uses
 `pRpc <https://github.com/datadvance/pRpc>`_
 to expose a rich API allowing to run multiple jobs, provide the proxy access to
 their listen ports and to upload and download files.
 
-It is intended to be used together with `pRouter <https://github.com/datadvance/pRouter>`_ 
+It is intended to be used together with `pRouter <https://github.com/datadvance/pRouter>`_
 as a part of a larger software system that requires executing distributed interactive jobs.
 
 Configuration
@@ -36,7 +36,7 @@ Command line description::
         client.reconnect_delay - Delay between reconnect attempts.
         client.token - Authentication token.
 
-        control.enabled - Enable (optional) administartion API. Control API has no authorization and should not be available over WAN.
+        control.enabled - Enable (optional) administration API. Control API has no authorization and should not be available over WAN.
         control.interface - Interface (ip address) to listen on.
         control.port - Port number to use. Can be set to 0 to use any free port.
 
@@ -52,3 +52,16 @@ Command line description::
         server.enabled - Enable agent server (passive) mode.
         server.interface - Interface (ip address) to listen on.
         server.port - Port number to use. Can be set to 0 to use any free port.
+
+Contributing
+------------
+
+This project is developed and maintained by DATADVANCE LLC. Please
+submit an issue if you have any questions or want to suggest an
+improvement.
+
+Acknowledgements
+----------------
+
+This work is supported by the Russian Foundation for Basic Research
+(project No. 15-29-07043).
